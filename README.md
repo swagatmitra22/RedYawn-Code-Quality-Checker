@@ -43,11 +43,7 @@ Check backend + LLM readiness:
 curl http://127.0.0.1:8000/health
 ```
 
-5. Start Streamlit dashboard:
 
-```bash
-streamlit run trinity_engine/app/dashboard.py
-```
 
 ## Frontend + Backend Integration
 
