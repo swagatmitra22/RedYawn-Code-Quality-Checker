@@ -57,6 +57,20 @@ The React UI now tries backend analysis first via:
 
 If the backend is unreachable, the UI falls back to its in-browser heuristic analyzer.
 
+## Run The Website (Vite Frontend)
+
+1. Install Node dependencies:
+
+```bash
+npm install
+```
+
+2. Start the frontend dev server:
+
+```bash
+npm run dev
+```
+
 ## CLI Options
 
 - `--use-llm`: Enable Groq suggestions
