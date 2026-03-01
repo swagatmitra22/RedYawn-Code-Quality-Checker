@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time
@@ -16,7 +15,6 @@ DEFAULT_MODEL = "llama-3.3-70b-versatile"
 FALLBACK_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
 MAX_RETRIES = 2
 RETRY_SLEEP_SECONDS = (1.5, 3.0)
-_SUGGESTION_CACHE: dict[str, AISuggestion] = {}
 
 
 def _sanitize_json(text: str) -> str:
@@ -30,16 +28,57 @@ def _sanitize_json(text: str) -> str:
     return cleaned
 
 
-def _fallback(issue: Issue) -> AISuggestion:
-    return AISuggestion(
-        issue_rule=issue.rule,
-        issue_file=issue.file,
-        issue_line=issue.line,
-        model="Rule-based fallback",
-        explanation=issue.description,
-        fixed_code=f"# Suggested fix for {issue.rule}\n# {issue.suggestion}",
-        improvement_summary=f"Apply {issue.rule} remediation to reduce {issue.category} risk.",
-    )
+def _extract_first_json_object(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for idx, ch in enumerate(text[start:], start=start):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+
+    return None
+
+
+def _parse_llm_json(text: str) -> dict:
+    cleaned = _sanitize_json(text)
+    candidates = [cleaned]
+    extracted = _extract_first_json_object(cleaned)
+    if extracted and extracted not in candidates:
+        candidates.append(extracted)
+
+    last_error = "invalid JSON response"
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+            last_error = "JSON root is not an object"
+        except Exception as exc:
+            last_error = str(exc)
+
+    raise RuntimeError(f"Invalid JSON from Groq: {last_error}")
 
 
 def _build_prompt(issue: Issue) -> str:
@@ -68,21 +107,6 @@ Return strict JSON only:
 """.strip()
 
 
-def _cache_key(issue: Issue, model_name: str) -> str:
-    raw = "|".join(
-        [
-            model_name,
-            issue.rule,
-            issue.file,
-            str(issue.line),
-            issue.description,
-            issue.suggestion,
-            issue.snippet,
-        ]
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
 def _is_retryable_error(message: str) -> bool:
     lowered = message.lower()
     keywords = (
@@ -101,6 +125,20 @@ def _is_retryable_error(message: str) -> bool:
         "500",
     )
     return any(keyword in lowered for keyword in keywords)
+
+
+def _is_retryable_generation_error(message: str) -> bool:
+    if _is_retryable_error(message):
+        return True
+    lowered = message.lower()
+    json_keywords = (
+        "invalid json",
+        "expecting",
+        "unterminated",
+        "delimiter",
+        "jsondecodeerror",
+    )
+    return any(keyword in lowered for keyword in json_keywords)
 
 
 def _compact_error(message: str) -> str:
@@ -138,6 +176,7 @@ def _post_groq_completion(api_key: str, model: str, prompt: str) -> str:
         ],
         "temperature": 0.2,
         "max_tokens": 900,
+        "response_format": {"type": "json_object"},
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -180,16 +219,18 @@ def generate_suggestions(
 
     key = os.getenv("GROQ_API_KEY")
     if not key:
-        warnings.append("GROQ_API_KEY not found in environment; using rule-based fallback.")
-        return [_fallback(issue) for issue in issues], warnings
+        warnings.append(
+            "AI fixes unavailable: GROQ_API_KEY is missing in backend environment."
+        )
+        return [], warnings
 
     try:
         import requests  # type: ignore  # noqa: F401
     except Exception:
         warnings.append(
-            "requests package not installed; using rule-based suggestion fallback."
+            "AI fixes unavailable: Python package 'requests' is not installed."
         )
-        return [_fallback(issue) for issue in issues], warnings
+        return [], warnings
 
     model_candidates: List[str] = []
     preferred = os.getenv("GROQ_MODEL", model_name).strip()
@@ -206,16 +247,10 @@ def generate_suggestions(
         last_error: str | None = None
 
         for candidate in model_candidates:
-            cache_id = _cache_key(issue, candidate)
-            cached = _SUGGESTION_CACHE.get(cache_id)
-            if cached:
-                suggestion = cached
-                break
-
             for attempt in range(MAX_RETRIES + 1):
                 try:
                     text = _sanitize_json(_post_groq_completion(key, candidate, prompt))
-                    payload = json.loads(text)
+                    payload = _parse_llm_json(text)
                     suggestion = AISuggestion(
                         issue_rule=issue.rule,
                         issue_file=issue.file,
@@ -230,11 +265,10 @@ def generate_suggestions(
                             )
                         ),
                     )
-                    _SUGGESTION_CACHE[cache_id] = suggestion
                     break
                 except Exception as exc:
                     last_error = str(exc)
-                    if attempt < MAX_RETRIES and _is_retryable_error(last_error):
+                    if attempt < MAX_RETRIES and _is_retryable_generation_error(last_error):
                         sleep_idx = min(attempt, len(RETRY_SLEEP_SECONDS) - 1)
                         time.sleep(RETRY_SLEEP_SECONDS[sleep_idx])
                         continue
@@ -251,7 +285,6 @@ def generate_suggestions(
                     f"Groq suggestion failed for {issue.rule} ({issue.file}:{issue.line}): "
                     f"{_compact_error(last_error)}"
                 )
-            suggestions.append(_fallback(issue))
 
     return suggestions, warnings
 
@@ -261,5 +294,7 @@ def generate_rule_suggestions(
     *,
     max_items: int = 5,
 ) -> List[AISuggestion]:
-    issues = list(prioritized_issues[: max(0, max_items)])
-    return [_fallback(issue) for issue in issues]
+    # Legacy compatibility path for callers that explicitly disable LLM usage.
+    # Rule-based fix synthesis has been intentionally disabled.
+    _ = prioritized_issues[: max(0, max_items)]
+    return []

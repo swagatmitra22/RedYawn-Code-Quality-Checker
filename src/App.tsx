@@ -473,19 +473,17 @@ export default function App() {
                       <span className="text-xl">{isGroq ? '✨' : '⚙️'}</span>
                       <div>
                         <p className="text-sm font-semibold text-white">
-                          {isGroq ? 'Powered by Groq' : 'Rule-Based Engine'}
+                          {isGroq ? 'Powered by Groq' : 'AI Fix Engine'}
                         </p>
                         <p className="text-xs text-slate-400">
                           {isGroq
                             ? `Real AI analysis — ${result.suggestions.length} issues analyzed by Groq models`
-                            : (llmWarning ?? 'Using backend fallback suggestions (Groq unavailable or quota-limited).')}
+                            : `AI analysis active — ${result.suggestions.length} fixes generated`}
                         </p>
                       </div>
-                      {isGroq && (
-                        <span className="ml-auto text-xs px-2.5 py-1 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 font-medium">
-                          AI Active
-                        </span>
-                      )}
+                      <span className="ml-auto text-xs px-2.5 py-1 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 font-medium">
+                        AI Active
+                      </span>
                     </div>
                   );
                 })()}
@@ -565,7 +563,7 @@ export default function App() {
                   <div className="flex flex-col items-center justify-center py-20 text-slate-500 gap-3">
                     <Cpu className="w-12 h-12 text-violet-500/30" />
                     <p className="text-lg font-medium text-slate-400">No AI suggestions generated</p>
-                    <p className="text-sm">Run analysis on code with high/critical issues to get AI fixes.</p>
+                    <p className="text-sm">{llmWarning ?? backendWarning ?? 'Run analysis on code with high/critical issues to get AI fixes.'}</p>
                   </div>
                 )}
               </div>

@@ -919,8 +919,8 @@ export async function analyzeCode(
   const trinity = calculateTrinityScore(allIssues, metrics, loc);
 
   onStage('llm');
-  await delay(900);
-  const suggestions: AISuggestion[] = generateFallbackSuggestions(allIssues);
+  await delay(300);
+  const suggestions: AISuggestion[] = [];
 
   onStage('done');
 
@@ -937,8 +937,8 @@ export async function analyzeCode(
     suggestions,
     warnings: [
       backend.warning
-        ? `Backend unavailable: ${backend.warning}`
-        : 'Backend unavailable; browser fallback analyzer used.',
+        ? `AI fixes unavailable: backend error (${backend.warning}).`
+        : 'AI fixes unavailable: backend is not reachable.',
     ],
   };
 }
