@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.log
+report*.json
+analysis*.json
+dist/
+node_modules/
